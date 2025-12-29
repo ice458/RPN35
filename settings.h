@@ -42,6 +42,23 @@ extern "C"
     uint8_t settings_get_lcd_contrast(void);
     void settings_set_lcd_contrast(uint8_t value); // 範囲外は丸め
 
+    // 表示桁数設定（Digits）: -1=ALL, 0..9 固定小数桁
+    int8_t settings_get_digits(void);
+    void settings_set_digits(int8_t digits);
+
+    // Lastキー動作: Last X / Undo
+    typedef enum
+    {
+        LAST_KEY_LAST_X = 0,
+        LAST_KEY_UNDO = 1,
+    } last_key_mode_t;
+    last_key_mode_t settings_get_last_key_mode(void);
+    void settings_set_last_key_mode(last_key_mode_t mode);
+
+    // レジューム機能 ON/OFF
+    bool settings_get_resume_enabled(void);
+    void settings_set_resume_enabled(bool enabled);
+
 #ifdef __cplusplus
 }
 #endif

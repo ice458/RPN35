@@ -162,6 +162,8 @@ extern "C"
     void rpn_acosh();
     void rpn_atanh();
     void rpn_last(); // LAST X をXに復帰
+    // Undo（スタック全体復帰。Lastキー設定がUndoのとき使用）
+    void rpn_undo();
     // 定数入力
     void rpn_input_pi(); // π
     void rpn_input_e();  // e
@@ -185,6 +187,26 @@ extern "C"
 
     // 設定の永続化: 電源OFF前などに変更があればFlashに保存
     void rpn_settings_maybe_save();
+
+    // Undoバッファ操作
+    void rpn_undo_clear(void);
+    // マクロ開始直前などユーザ境界で明示的にキャプチャ
+    void rpn_undo_capture_boundary(void);
+
+    // リセット系（Resetサブメニュー用）
+    void rpn_reset_stack_only(void); // X,Y,Z,T と Last X、入力状態、Undo クリア
+    void rpn_reset_vars_only(void);  // 変数A..F のみクリア
+    void rpn_reset_memory(void);     // Stack + Vars をクリア
+
+    // レジューム用にRPN状態を取得/設定
+    typedef struct
+    {
+        BID_UINT128 x, y, z, t;
+        BID_UINT128 last_x;
+        BID_UINT128 vars[6];
+    } rpn_state_t;
+    void rpn_get_state(rpn_state_t *out);
+    void rpn_set_state(const rpn_state_t *st);
 
 #ifdef __cplusplus
 }

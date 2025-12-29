@@ -42,6 +42,7 @@ add_executable(RPN35
     RPN.c
     menu.c
     macro.c
+    resume.c
     settings.c
     clock_ctrl.c
     ui_const.c
@@ -49,7 +50,7 @@ add_executable(RPN35
 )
 
 pico_set_program_name(RPN35 "RPN35")
-pico_set_program_version(RPN35 "0.1")
+pico_set_program_version(RPN35 "0.2")
 
 # Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(RPN35 0)

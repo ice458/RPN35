@@ -16,6 +16,7 @@
 #include "macro.h"
 #include "ui_const.h"
 #include "ui_macro.h"
+#include "resume.h"
 
 void power_down_seq(void)
 {
@@ -26,6 +27,7 @@ void power_down_seq(void)
     lcd_write_str("    See you!    ");
     settings_save_if_dirty();
     macro_save_if_dirty();
+    resume_save_if_enabled();
     sleep_ms(500);
     POWER_DOWN;
 }
@@ -467,6 +469,11 @@ static bool handle_key(key_event_t ev)
         }
         else
         {
+            // Undoモード時はマクロ開始直前に境界スナップショットを1回だけ取る
+            if (settings_get_last_key_mode() == LAST_KEY_UNDO)
+            {
+                rpn_undo_capture_boundary();
+            }
             bool started = macro_play(0);
             key_set_shift_state(false);
             return started ? false : true; // 再生時は注入イベントで描画
@@ -478,6 +485,10 @@ static bool handle_key(key_event_t ev)
         }
         else
         {
+            if (settings_get_last_key_mode() == LAST_KEY_UNDO)
+            {
+                rpn_undo_capture_boundary();
+            }
             bool started = macro_play(1);
             key_set_shift_state(false);
             return started ? false : true;
@@ -489,6 +500,10 @@ static bool handle_key(key_event_t ev)
         }
         else
         {
+            if (settings_get_last_key_mode() == LAST_KEY_UNDO)
+            {
+                rpn_undo_capture_boundary();
+            }
             bool started = macro_play(2);
             key_set_shift_state(false);
             return started ? false : true;
@@ -539,8 +554,15 @@ static bool handle_key(key_event_t ev)
 
     // Last
     case K_LAST:
-        rpn_last();
-        // LAST 実行後はシフト解除
+        if (settings_get_last_key_mode() == LAST_KEY_UNDO)
+        {
+            rpn_undo();
+        }
+        else
+        {
+            rpn_last();
+        }
+        // 実行後はシフト解除
         key_set_shift_state(false);
         return true;
 
@@ -624,6 +646,8 @@ int main(void)
     init_rpn();
     // マクロ初期化
     macro_init();
+    // レジューム復帰（有効時・正常時のみ）
+    resume_try_restore_on_boot();
     // LCDクリア
     lcd_clear();
     // 初期画面表示

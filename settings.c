@@ -9,16 +9,20 @@
 
 typedef struct __attribute__((packed))
 {
-    uint32_t magic;         // 固定
-    uint32_t version;       // 構造バージョン
-    uint32_t crc;           // データ部CRC32
-    init_state_t data;      // 設定（RPNコア連携）
-    uint32_t auto_off_mode; // 自動電源OFF設定（settings.h の auto_off_mode_t）
-    uint32_t lcd_contrast;  // LCDコントラスト(0-63)
+    uint32_t magic;          // 固定
+    uint32_t version;        // 構造バージョン
+    uint32_t crc;            // データ部CRC32（init_state_t のみ）
+    init_state_t data;       // 設定（RPNコア連携）
+    uint32_t auto_off_mode;  // 自動電源OFF設定（settings.h の auto_off_mode_t）
+    uint32_t lcd_contrast;   // LCDコントラスト(0-63)
+    // v4 追加項目
+    uint32_t digits_value;   // 表示桁数: 0..9, 0xFF=ALL
+    uint32_t last_key_mode;  // 0=Last X, 1=Undo
+    uint32_t resume_enabled; // 0=OFF, 1=ON
 } settings_blob_t;
 
 static const uint32_t SETTINGS_MAGIC = 0x53544631; // 'STF1'
-static const uint32_t SETTINGS_VERSION = 3;        // v3 で lcd_contrast を追加
+static const uint32_t SETTINGS_VERSION = 4;        // v4 で digits/last_key/resume を追加
 
 static settings_blob_t g_loaded;
 static bool g_have_loaded = false;
@@ -50,7 +54,7 @@ void settings_init(void)
 {
     // フラッシュから読み出し
     const settings_blob_t *rom = (const settings_blob_t *)(XIP_BASE + FLASH_TARGET_OFFSET);
-    if (rom->magic == SETTINGS_MAGIC && (rom->version == 1 || rom->version == 2 || rom->version == SETTINGS_VERSION))
+    if (rom->magic == SETTINGS_MAGIC && (rom->version == 1 || rom->version == 2 || rom->version == 3 || rom->version == SETTINGS_VERSION))
     {
         // v1とv2でCRCの取り方を切り分け
         if (rom->version == 1)
@@ -66,6 +70,10 @@ void settings_init(void)
                 g_loaded.auto_off_mode = (uint32_t)AUTO_OFF_10_MIN;
                 // v1 には lcd_contrast が無いのでデフォルトを採用（中間値）
                 g_loaded.lcd_contrast = 40u;
+                // v4 追加分のデフォルト
+                g_loaded.digits_value = 0xFFu;         // ALL
+                g_loaded.last_key_mode = 0u;           // Last X
+                g_loaded.resume_enabled = 0u;          // OFF
                 // CRCをv2形式で再計算
                 uint32_t new_crc = crc32_calc(&g_loaded.data, sizeof(g_loaded.data));
                 g_loaded.crc = new_crc;
@@ -84,6 +92,30 @@ void settings_init(void)
                 g_loaded.data = rom->data;
                 g_loaded.auto_off_mode = rom->auto_off_mode;
                 g_loaded.lcd_contrast = 40u; // 既存ユーザは中間値に初期化
+                // v4 追加分のデフォルト
+                g_loaded.digits_value = 0xFFu;         // ALL
+                g_loaded.last_key_mode = 0u;           // Last X
+                g_loaded.resume_enabled = 0u;          // OFF
+                g_loaded.crc = rom->crc;
+                g_have_loaded = true;
+            }
+        }
+        else if (rom->version == 3)
+        {
+            // v3 現行（追加項目なし）
+            uint32_t crc = crc32_calc(&rom->data, sizeof(rom->data));
+            if (crc == rom->crc)
+            {
+                memset(&g_loaded, 0, sizeof(g_loaded));
+                g_loaded.magic = SETTINGS_MAGIC;
+                g_loaded.version = SETTINGS_VERSION;
+                g_loaded.data = rom->data;
+                g_loaded.auto_off_mode = rom->auto_off_mode;
+                g_loaded.lcd_contrast = rom->lcd_contrast;
+                // v4 追加分のデフォルト
+                g_loaded.digits_value = 0xFFu;
+                g_loaded.last_key_mode = 0u;
+                g_loaded.resume_enabled = 0u;
                 g_loaded.crc = rom->crc;
                 g_have_loaded = true;
             }
@@ -94,6 +126,7 @@ void settings_init(void)
             uint32_t crc = crc32_calc(&rom->data, sizeof(rom->data));
             if (crc == rom->crc)
             {
+                // v4 現行をそのままロード
                 g_loaded = *rom;
                 g_have_loaded = true;
             }
@@ -107,6 +140,9 @@ void settings_init(void)
         defaults(&g_loaded.data);
         g_loaded.auto_off_mode = (uint32_t)AUTO_OFF_10_MIN; // デフォルトは10分
         g_loaded.lcd_contrast = 40u;                        // デフォルトは中間やや上
+        g_loaded.digits_value = 0xFFu;                      // ALL
+        g_loaded.last_key_mode = 0u;                        // Last X
+        g_loaded.resume_enabled = 0u;                       // OFF
         g_loaded.crc = crc32_calc(&g_loaded.data, sizeof(g_loaded.data));
     }
     g_dirty_since_boot = false;
@@ -155,6 +191,9 @@ void settings_reset_to_defaults(void)
     defaults(&g_loaded.data);
     g_loaded.auto_off_mode = (uint32_t)AUTO_OFF_10_MIN;
     g_loaded.lcd_contrast = 40u;
+    g_loaded.digits_value = 0xFFu;
+    g_loaded.last_key_mode = 0u;
+    g_loaded.resume_enabled = 0u;
     g_loaded.crc = crc32_calc(&g_loaded.data, sizeof(g_loaded.data));
     g_have_loaded = true;
     g_dirty_since_boot = true;
@@ -231,6 +270,81 @@ void settings_set_lcd_contrast(uint8_t value)
     if (g_loaded.lcd_contrast != v)
     {
         g_loaded.lcd_contrast = v;
+        g_dirty_since_boot = true;
+    }
+}
+
+// ---- Digits（表示桁数） ----
+int8_t settings_get_digits(void)
+{
+    if (!g_have_loaded)
+        settings_init();
+    uint32_t v = g_loaded.digits_value;
+    if (v == 0xFFu)
+        return -1; // ALL
+    if (v > 9u)
+        v = 9u;
+    return (int8_t)v;
+}
+
+void settings_set_digits(int8_t digits)
+{
+    if (!g_have_loaded)
+        settings_init();
+    uint32_t v;
+    if (digits < 0)
+        v = 0xFFu;
+    else
+    {
+        if (digits > 9)
+            digits = 9;
+        v = (uint32_t)digits;
+    }
+    if (g_loaded.digits_value != v)
+    {
+        g_loaded.digits_value = v;
+        // CRCは data のみ対象
+        g_dirty_since_boot = true;
+    }
+}
+
+// ---- Last Key モード ----
+last_key_mode_t settings_get_last_key_mode(void)
+{
+    if (!g_have_loaded)
+        settings_init();
+    uint32_t v = g_loaded.last_key_mode;
+    return (v == 1u) ? LAST_KEY_UNDO : LAST_KEY_LAST_X;
+}
+
+void settings_set_last_key_mode(last_key_mode_t mode)
+{
+    if (!g_have_loaded)
+        settings_init();
+    uint32_t v = (mode == LAST_KEY_UNDO) ? 1u : 0u;
+    if (g_loaded.last_key_mode != v)
+    {
+        g_loaded.last_key_mode = v;
+        g_dirty_since_boot = true;
+    }
+}
+
+// ---- Resume ON/OFF ----
+bool settings_get_resume_enabled(void)
+{
+    if (!g_have_loaded)
+        settings_init();
+    return g_loaded.resume_enabled ? true : false;
+}
+
+void settings_set_resume_enabled(bool enabled)
+{
+    if (!g_have_loaded)
+        settings_init();
+    uint32_t v = enabled ? 1u : 0u;
+    if (g_loaded.resume_enabled != v)
+    {
+        g_loaded.resume_enabled = v;
         g_dirty_since_boot = true;
     }
 }

@@ -1,5 +1,6 @@
 #include "RPN.h"
 #include "key.h"
+#include "settings.h"
 
 // 科学定数（2グループ×10件）
 typedef struct
@@ -43,6 +44,86 @@ BID_UINT128 last_x;
 static BID_UINT128 vars_mem[6];
 static rpn_var_op_t pending_var_op = RPN_VAR_OP_NONE;
 
+// 生のスタック操作（Undo記録なし）
+static inline void stack_push_raw(void)
+{
+    stack[3] = stack[2];
+    stack[2] = stack[1];
+    stack[1] = stack[0];
+}
+static inline void stack_pop_raw(void)
+{
+    stack[0] = stack[1];
+    stack[1] = stack[2];
+    stack[2] = stack[3];
+}
+static inline void stack_swap_raw(void)
+{
+    BID_UINT128 tmp = stack[0];
+    stack[0] = stack[1];
+    stack[1] = tmp;
+}
+static inline void stack_roll_up_raw(void)
+{
+    BID_UINT128 tmp = stack[3];
+    stack[3] = stack[2];
+    stack[2] = stack[1];
+    stack[1] = stack[0];
+    stack[0] = tmp;
+}
+static inline void stack_roll_down_raw(void)
+{
+    BID_UINT128 tmp = stack[0];
+    stack[0] = stack[1];
+    stack[1] = stack[2];
+    stack[2] = stack[3];
+    stack[3] = tmp;
+}
+
+// Undo リング（スタックのみ）
+typedef struct
+{
+    BID_UINT128 x, y, z, t;
+} undo_entry_t;
+static undo_entry_t undo_buf[100];
+static int undo_len = 0; // 有効エントリ数
+static int undo_pos = 0; // 次にUndoで取り出す位置（undo_pos-1）
+
+static void undo_clear_all(void)
+{
+    undo_len = 0;
+    undo_pos = 0;
+}
+
+static void undo_truncate_future(void)
+{
+    if (undo_pos < undo_len)
+        undo_len = undo_pos;
+}
+
+static void undo_push_snapshot_if_enabled(void)
+{
+    if (settings_get_last_key_mode() != LAST_KEY_UNDO)
+        return;
+    // 未来分を切り捨て
+    undo_truncate_future();
+    // 満杯なら前詰め
+    if (undo_len >= (int)(sizeof(undo_buf) / sizeof(undo_buf[0])))
+    {
+        for (int i = 1; i < undo_len; ++i)
+            undo_buf[i - 1] = undo_buf[i];
+        undo_len--;
+        if (undo_pos > 0)
+            undo_pos--;
+    }
+    undo_buf[undo_len].x = stack[0];
+    undo_buf[undo_len].y = stack[1];
+    undo_buf[undo_len].z = stack[2];
+    undo_buf[undo_len].t = stack[3];
+    undo_len++;
+    undo_pos = undo_len;
+}
+
 void stack_init()
 {
     bid128_from_string(&last_x, "0");
@@ -54,45 +135,37 @@ void stack_init()
     for (int i = 0; i < 6; ++i)
         bid128_from_string(&vars_mem[i], "0");
     pending_var_op = RPN_VAR_OP_NONE;
+    undo_clear_all();
 }
 
 void stack_push()
 {
-    stack[3] = stack[2];
-    stack[2] = stack[1];
-    stack[1] = stack[0];
+    undo_push_snapshot_if_enabled();
+    stack_push_raw();
 }
 
 void stack_pop()
 {
-    stack[0] = stack[1];
-    stack[1] = stack[2];
-    stack[2] = stack[3];
+    undo_push_snapshot_if_enabled();
+    stack_pop_raw();
 }
 
 void stack_swap()
 {
-    BID_UINT128 tmp = stack[0];
-    stack[0] = stack[1];
-    stack[1] = tmp;
+    undo_push_snapshot_if_enabled();
+    stack_swap_raw();
 }
 
 void stack_roll_up()
 {
-    BID_UINT128 tmp = stack[3];
-    stack[3] = stack[2];
-    stack[2] = stack[1];
-    stack[1] = stack[0];
-    stack[0] = tmp;
+    undo_push_snapshot_if_enabled();
+    stack_roll_up_raw();
 }
 
 void stack_roll_down()
 {
-    BID_UINT128 tmp = stack[0];
-    stack[0] = stack[1];
-    stack[1] = stack[2];
-    stack[2] = stack[3];
-    stack[3] = tmp;
+    undo_push_snapshot_if_enabled();
+    stack_roll_down_raw();
 }
 
 // #########################
@@ -372,6 +445,9 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
 
     // 表示モードごとの整形
     disp_mode_t mode = init_state.disp_mode;
+    // Digits設定: -1=ALL(可変/Trim), 0..9=固定(ゼロ埋め)
+    int8_t digits_cfg = settings_get_digits();
+    bool force_pad = (digits_cfg >= 0);
 
     if (mode == DISP_MODE_SCIENTIFIC)
     {
@@ -387,6 +463,12 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             sig = cap;
             if (sig > mlen)
                 sig = mlen;
+        }
+        if (force_pad)
+        {
+            sig = 1 + digits_cfg;
+            if (sig > mlen) sig = mlen;
+            cap = sig;
         }
         char tmp[64];
         memcpy(tmp, mant, (size_t)mlen + 1);
@@ -425,7 +507,7 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
         {
             int start = 1;
             int available_frac = (newlen > 1) ? (newlen - 1) : 0;
-            if (init_state.zero_mode == ZERO_MODE_TRIM)
+            if (!force_pad)
             {
                 int end = newlen;
                 while (end > start && tmp[end - 1] == '0')
@@ -439,7 +521,7 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             }
             else // ZERO_MODE_PAD: 表示可能桁までゼロ埋め
             {
-                int desired_frac = (cap > 1) ? (cap - 1) : 0;
+                int desired_frac = force_pad ? digits_cfg : ((cap > 1) ? (cap - 1) : 0);
                 if (desired_frac > 0 && out_i < max_chars)
                 {
                     PUSH_CH('.');
@@ -508,6 +590,13 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             if (sig > mlen)
                 sig = mlen;
         }
+        if (force_pad)
+        {
+            sig = digits_before + digits_cfg;
+            if (sig < 1) sig = 1;
+            if (sig > mlen) sig = mlen;
+            cap = sig;
+        }
 
         char tmp[64];
         memcpy(tmp, mant, (size_t)mlen + 1);
@@ -563,7 +652,7 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
         {
             int start = digits_before;
             int available_frac = (newlen > digits_before) ? (newlen - digits_before) : 0;
-            if (init_state.zero_mode == ZERO_MODE_TRIM)
+            if (!force_pad)
             {
                 int end = newlen;
                 while (end > start && tmp[end - 1] == '0')
@@ -577,7 +666,7 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             }
             else // ZERO_MODE_PAD
             {
-                int desired_frac = (cap > digits_before) ? (cap - digits_before) : 0;
+                int desired_frac = force_pad ? digits_cfg : ((cap > digits_before) ? (cap - digits_before) : 0);
                 if (desired_frac > 0 && out_i < max_chars)
                 {
                     PUSH_CH('.');
@@ -717,8 +806,9 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
     }
     frac_full[ffull] = '\0';
 
-    // 丸めで保持する小数桁は「表示可能上限」と「元の小数桁」の小さい方
-    int keep_frac = (cap_frac < ffull) ? cap_frac : ffull;
+    // 丸めで保持する小数桁
+    int keep_frac = (force_pad ? ((digits_cfg < ffull) ? digits_cfg : ffull)
+                               : ((cap_frac < ffull) ? cap_frac : ffull));
     if (keep_frac < ffull)
     {
         char work[128];
@@ -749,9 +839,17 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
         int cap_frac2 = (avail_after_int2 > 0) ? (avail_after_int2 - 1) : 0;
         if (cap_frac2 < 0)
             cap_frac2 = 0;
-        if (new_frac_len > cap_frac2)
-            new_frac_len = cap_frac2;
-        if (init_state.zero_mode == ZERO_MODE_TRIM)
+        if (!force_pad)
+        {
+            if (new_frac_len > cap_frac2)
+                new_frac_len = cap_frac2;
+        }
+        else
+        {
+            if (new_frac_len > digits_cfg)
+                new_frac_len = digits_cfg;
+        }
+        if (!force_pad)
             while (new_frac_len > 0 && work[intbuf_len + new_frac_len - 1] == '0')
                 new_frac_len--;
 
@@ -761,7 +859,7 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             PUSH_CH(intbuf[i]);
         if (out_i < max_chars)
         {
-            if (init_state.zero_mode == ZERO_MODE_TRIM)
+            if (!force_pad)
             {
                 if (new_frac_len > 0)
                 {
@@ -772,18 +870,18 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             }
             else // ZERO_MODE_PAD: ちょうどmax_frac桁までゼロ埋め
             {
-                // PAD: 表示可能上限までゼロ埋め
-                if (cap_frac2 > 0)
+                int desired = digits_cfg;
+                if (desired > 0)
                 {
                     PUSH_CH('.');
                     int shown = 0;
-                    int take = (new_frac_len < cap_frac2) ? new_frac_len : cap_frac2;
+                    int take = (new_frac_len < desired) ? new_frac_len : desired;
                     for (i = 0; i < take && out_i < max_chars; ++i)
                     {
                         PUSH_CH(work[intbuf_len + i]);
                         shown++;
                     }
-                    while (shown < cap_frac2 && out_i < max_chars)
+                    while (shown < desired && out_i < max_chars)
                     {
                         PUSH_CH('0');
                         shown++;
@@ -797,7 +895,7 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
     else
     {
         int new_frac_len = ffull;
-        if (init_state.zero_mode == ZERO_MODE_TRIM)
+        if (!force_pad)
             while (new_frac_len > 0 && frac_full[new_frac_len - 1] == '0')
                 new_frac_len--;
         if (neg)
@@ -807,7 +905,7 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             PUSH_CH(intbuf[i]);
         if (out_i < max_chars)
         {
-            if (init_state.zero_mode == ZERO_MODE_TRIM)
+            if (!force_pad)
             {
                 if (new_frac_len > 0)
                 {
@@ -818,22 +916,18 @@ void bid128_to_str(BID_UINT128 x, char *buf, int bufsize)
             }
             else // ZERO_MODE_PAD
             {
-                // 現在の整数部長に基づく表示可能小数桁を算出
-                int avail_after_int2 = max_chars - (neg ? 1 : 0) - intbuf_len;
-                int cap_frac2 = (avail_after_int2 > 0) ? (avail_after_int2 - 1) : 0;
-                if (cap_frac2 < 0)
-                    cap_frac2 = 0;
-                if (cap_frac2 > 0)
+                int desired = digits_cfg;
+                if (desired > 0)
                 {
                     PUSH_CH('.');
                     int shown = 0;
-                    int take = (new_frac_len < cap_frac2) ? new_frac_len : cap_frac2;
+                    int take = (new_frac_len < desired) ? new_frac_len : desired;
                     for (i = 0; i < take && out_i < max_chars; ++i)
                     {
                         PUSH_CH(frac_full[i]);
                         shown++;
                     }
-                    while (shown < cap_frac2 && out_i < max_chars)
+                    while (shown < desired && out_i < max_chars)
                     {
                         PUSH_CH('0');
                         shown++;
@@ -857,6 +951,7 @@ void init_rpn()
     clear_flag_state();
     clear_input_state();
     load_settings();
+    undo_clear_all();
 }
 
 // #########################
@@ -871,6 +966,7 @@ BID_UINT128 rpn_stack_t() { return stack[3]; }
 // Xレジスタを直接設定（入力状態はクリア）
 void rpn_set_x(BID_UINT128 x)
 {
+    undo_push_snapshot_if_enabled();
     // LAST X は上書き前のXを保存
     last_x = stack[0];
     stack[0] = x;
@@ -896,6 +992,7 @@ bool rpn_var_apply_slot(int slot_idx)
     switch (pending_var_op)
     {
     case RPN_VAR_OP_ST:
+        undo_push_snapshot_if_enabled();
         vars_mem[slot_idx] = stack[0];
         break;
     case RPN_VAR_OP_LD:
@@ -903,15 +1000,18 @@ bool rpn_var_apply_slot(int slot_idx)
         // pi/e と同じ挙動: 必要時のみpush → 入力クリア → Xへ設定 → 次の数値入力でpushさせる
         if (flag_state.push_flag)
         {
-            stack_push();
+            undo_push_snapshot_if_enabled();
+            stack_push_raw();
         }
         clear_input_state();
+        undo_push_snapshot_if_enabled();
         stack[0] = vars_mem[slot_idx];
         flag_state.push_flag = true;
         break;
     }
     case RPN_VAR_OP_CLR:
     {
+        undo_push_snapshot_if_enabled();
         BID_UINT128 zero;
         bid128_from_string(&zero, "0");
         vars_mem[slot_idx] = zero;
@@ -1219,9 +1319,10 @@ void rpn_commit_input_without_push()
 void rpn_enter()
 {
     // 入力確定してプッシュ
+    undo_push_snapshot_if_enabled();
     if (input_state.input_len > 0)
         update_x_from_input_if_valid();
-    stack_push();
+    stack_push_raw();
     // 次の入力は新規値として開始（余計な自動pushはさせない）
     clear_input_state();
     flag_state.push_flag = false;
@@ -1229,56 +1330,63 @@ void rpn_enter()
 
 void rpn_swap()
 {
-    stack_swap();
+    undo_push_snapshot_if_enabled();
+    stack_swap_raw();
     clear_input_state();
     flag_state.push_flag = true;
 }
 void rpn_roll_up()
 {
-    stack_roll_up();
+    undo_push_snapshot_if_enabled();
+    stack_roll_up_raw();
     clear_input_state();
     flag_state.push_flag = true;
 }
 void rpn_roll_down()
 {
-    stack_roll_down();
+    undo_push_snapshot_if_enabled();
+    stack_roll_down_raw();
     clear_input_state();
     flag_state.push_flag = true;
 }
 
 void rpn_add()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 res;
     __bid128_add(&res, &stack[1], &stack[0]);
-    stack_pop();
+    stack_pop_raw();
     stack[0] = res;
     after_operation();
 }
 void rpn_sub()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 res;
     __bid128_sub(&res, &stack[1], &stack[0]); // y - x
-    stack_pop();
+    stack_pop_raw();
     stack[0] = res;
     after_operation();
 }
 void rpn_mul()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 res;
     __bid128_mul(&res, &stack[1], &stack[0]);
-    stack_pop();
+    stack_pop_raw();
     stack[0] = res;
     after_operation();
 }
 void rpn_div()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 res;
     __bid128_div(&res, &stack[1], &stack[0]); // y / x
-    stack_pop();
+    stack_pop_raw();
     stack[0] = res;
     after_operation();
 }
@@ -1286,6 +1394,7 @@ void rpn_div()
 // 単項演算
 void rpn_sqrt()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_sqrt(&stack[0], &stack[0]);
     after_operation();
@@ -1293,6 +1402,7 @@ void rpn_sqrt()
 void rpn_rev()
 {
     // 1 / x
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 one, res;
     bid128_from_string(&one, "1");
@@ -1302,6 +1412,7 @@ void rpn_rev()
 }
 void rpn_pow2()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 t;
     __bid128_mul(&t, &stack[0], &stack[0]);
@@ -1311,16 +1422,18 @@ void rpn_pow2()
 void rpn_pow()
 {
     // y^x
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 res;
     __bid128_pow(&res, &stack[1], &stack[0]);
-    stack_pop();
+    stack_pop_raw();
     stack[0] = res;
     after_operation();
 }
 void rpn_nth_root()
 {
     // y√x = x^(1/y)
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 one, inv_y, res;
     bid128_from_string(&one, "1");
@@ -1333,6 +1446,7 @@ void rpn_nth_root()
 void rpn_log()
 {
     // log10(x)
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_log10(&stack[0], &stack[0]);
     after_operation();
@@ -1340,6 +1454,7 @@ void rpn_log()
 void rpn_ln()
 {
     // ln(x)
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_log(&stack[0], &stack[0]);
     after_operation();
@@ -1364,6 +1479,7 @@ static void rpn_convert_angle_to_rad(BID_UINT128 *x)
 void rpn_sin()
 {
     // 角度モードに応じて入力xをラジアンへ変換しsin
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 x = stack[0];
     BID_UINT128 res;
@@ -1374,6 +1490,7 @@ void rpn_sin()
 }
 void rpn_cos()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 x = stack[0];
     BID_UINT128 res;
@@ -1384,6 +1501,7 @@ void rpn_cos()
 }
 void rpn_tan()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 x = stack[0];
     BID_UINT128 res;
@@ -1396,6 +1514,7 @@ void rpn_tan()
 // 追加単項・二項演算
 void rpn_cube()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 t, res;
     __bid128_mul(&t, &stack[0], &stack[0]);
@@ -1406,6 +1525,7 @@ void rpn_cube()
 
 void rpn_cbrt()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_cbrt(&stack[0], &stack[0]);
     after_operation();
@@ -1413,6 +1533,7 @@ void rpn_cbrt()
 
 void rpn_exp()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_exp(&stack[0], &stack[0]);
     after_operation();
@@ -1420,6 +1541,7 @@ void rpn_exp()
 
 void rpn_exp10()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_exp10(&stack[0], &stack[0]);
     after_operation();
@@ -1428,6 +1550,7 @@ void rpn_exp10()
 void rpn_fact()
 {
     // 整数は自前実装（精度改善）。非整数は x! = Γ(x + 1)
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
 
     BID_UINT128 x = stack[0];
@@ -1506,6 +1629,7 @@ void rpn_fact()
 void rpn_logxy()
 {
     // log_x(y)
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 ln_y, ln_x, res;
     __bid128_log(&ln_y, &stack[1]);
@@ -1535,6 +1659,7 @@ static void rpn_convert_angle_from_rad(BID_UINT128 *x)
 
 void rpn_asin()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 r;
     __bid128_asin(&r, &stack[0]); // radians
@@ -1545,6 +1670,7 @@ void rpn_asin()
 
 void rpn_acos()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 r;
     __bid128_acos(&r, &stack[0]); // radians
@@ -1555,6 +1681,7 @@ void rpn_acos()
 
 void rpn_atan()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     BID_UINT128 r;
     __bid128_atan(&r, &stack[0]); // radians
@@ -1566,6 +1693,7 @@ void rpn_atan()
 // 双曲線関数（角度モードは適用しない: 引数は無次元としてそのまま扱う）
 void rpn_sinh()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_sinh(&stack[0], &stack[0]);
     after_operation();
@@ -1573,6 +1701,7 @@ void rpn_sinh()
 
 void rpn_cosh()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_cosh(&stack[0], &stack[0]);
     after_operation();
@@ -1580,6 +1709,7 @@ void rpn_cosh()
 
 void rpn_tanh()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_tanh(&stack[0], &stack[0]);
     after_operation();
@@ -1587,6 +1717,7 @@ void rpn_tanh()
 
 void rpn_asinh()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_asinh(&stack[0], &stack[0]);
     after_operation();
@@ -1594,6 +1725,7 @@ void rpn_asinh()
 
 void rpn_acosh()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_acosh(&stack[0], &stack[0]);
     after_operation();
@@ -1601,6 +1733,7 @@ void rpn_acosh()
 
 void rpn_atanh()
 {
+    undo_push_snapshot_if_enabled();
     last_x = stack[0];
     __bid128_atanh(&stack[0], &stack[0]);
     after_operation();
@@ -1660,9 +1793,11 @@ void rpn_input_pi()
     // 入力中断して定数をXへ。必要なら push してから設定。
     if (flag_state.push_flag)
     {
-        stack_push();
+        undo_push_snapshot_if_enabled();
+        stack_push_raw();
     }
     clear_input_state();
+    undo_push_snapshot_if_enabled();
     bid128_from_string(&stack[0], "3.1415926535897932384626433832795028842");
     // 定数は確定値として扱うので、次の数値入力で push されるようにする
     flag_state.push_flag = true;
@@ -1672,9 +1807,11 @@ void rpn_input_e()
 {
     if (flag_state.push_flag)
     {
-        stack_push();
+        undo_push_snapshot_if_enabled();
+        stack_push_raw();
     }
     clear_input_state();
+    undo_push_snapshot_if_enabled();
     bid128_from_string(&stack[0], "2.7182818284590452353602874713526624978");
     flag_state.push_flag = true;
 }
@@ -1702,4 +1839,84 @@ int rpn_get_input_string(char *buf, int bufsize)
         buf[i] = input_state.input_str[i];
     buf[n] = '\0';
     return input_state.input_len;
+}
+
+// ###############
+//  Undo/Reset/State APIs
+// ###############
+void rpn_undo()
+{
+    if (undo_pos <= 0)
+        return;
+    int idx = undo_pos - 1;
+    stack[0] = undo_buf[idx].x;
+    stack[1] = undo_buf[idx].y;
+    stack[2] = undo_buf[idx].z;
+    stack[3] = undo_buf[idx].t;
+    undo_pos = idx;
+    clear_input_state();
+    flag_state.push_flag = true;
+}
+
+void rpn_undo_clear(void)
+{
+    undo_clear_all();
+}
+
+void rpn_undo_capture_boundary(void)
+{
+    undo_push_snapshot_if_enabled();
+}
+
+void rpn_reset_stack_only(void)
+{
+    bid128_from_string(&last_x, "0");
+    bid128_from_string(&stack[0], "0");
+    bid128_from_string(&stack[1], "0");
+    bid128_from_string(&stack[2], "0");
+    bid128_from_string(&stack[3], "0");
+    clear_input_state();
+    flag_state.push_flag = false;
+    undo_clear_all();
+}
+
+void rpn_reset_vars_only(void)
+{
+    for (int i = 0; i < 6; ++i)
+        bid128_from_string(&vars_mem[i], "0");
+}
+
+void rpn_reset_memory(void)
+{
+    rpn_reset_stack_only();
+    rpn_reset_vars_only();
+}
+
+void rpn_get_state(rpn_state_t *out)
+{
+    if (!out)
+        return;
+    out->x = stack[0];
+    out->y = stack[1];
+    out->z = stack[2];
+    out->t = stack[3];
+    out->last_x = last_x;
+    for (int i = 0; i < 6; ++i)
+        out->vars[i] = vars_mem[i];
+}
+
+void rpn_set_state(const rpn_state_t *st)
+{
+    if (!st)
+        return;
+    stack[0] = st->x;
+    stack[1] = st->y;
+    stack[2] = st->z;
+    stack[3] = st->t;
+    last_x = st->last_x;
+    for (int i = 0; i < 6; ++i)
+        vars_mem[i] = st->vars[i];
+    clear_input_state();
+    flag_state.push_flag = true;
+    undo_clear_all();
 }

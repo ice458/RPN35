@@ -73,10 +73,28 @@ static int get_angle_mode(void) { return (int)rpn_get_angle_mode(); }
 static void set_angle_mode(int v) { rpn_set_angle_mode((angle_mode_t)v); }
 static int get_disp_mode(void) { return (int)rpn_get_disp_mode(); }
 static void set_disp_mode(int v) { rpn_set_disp_mode((disp_mode_t)v); }
-static int get_zero_mode(void) { return (int)rpn_get_zero_mode(); }
-static void set_zero_mode(int v) { rpn_set_zero_mode((zero_mode_t)v); }
 static int get_hyper_mode(void) { return (int)rpn_get_hyperbolic_mode(); }
 static void set_hyper_mode(int v) { rpn_set_hyperbolic_mode((hyperbolic_mode_t)v); }
+
+// Digits （ALL,0..9）
+static int get_digits_enum(void)
+{
+    int8_t d = settings_get_digits();
+    return (d < 0) ? 0 : (1 + d);
+}
+static void set_digits_enum(int idx)
+{
+    if (idx <= 0)
+        settings_set_digits(-1);
+    else
+        settings_set_digits((int8_t)(idx - 1));
+}
+// Last Key mode
+static int get_last_key_mode_enum(void) { return (int)settings_get_last_key_mode(); }
+static void set_last_key_mode_enum(int v) { settings_set_last_key_mode((last_key_mode_t)v); }
+// Resume toggle
+static int get_resume_enum(void) { return settings_get_resume_enabled() ? 1 : 0; }
+static void set_resume_enum(int v) { settings_set_resume_enabled(v ? true : false); }
 
 // アクション関数
 static void action_reset_calculator(void)
@@ -216,6 +234,12 @@ static void action_adjust_contrast(void)
     g_menu.redraw_needed = true;
 }
 
+// メニュー矢印を表示すべき項目か判定（サブメニュー or コントラスト調整）
+static inline bool menu_item_has_arrow(const menu_item_t *item)
+{
+    return item && (item->type == MI_SUBMENU || item->action == action_adjust_contrast);
+}
+
 static void action_about(void)
 {
     // バージョン情報を表示し、任意のキーで戻る
@@ -311,7 +335,7 @@ static void action_exit_menu(void)
 // 列挙値ラベル
 static const char *const angle_labels[] = {"DEG", "RAD", "GRAD"};
 static const char *const disp_labels[] = {"NORM", "SCI", "ENG"};
-static const char *const zero_labels[] = {"PAD", "TRIM"};
+static const char *const digits_labels[] = {"ALL", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
 static const char *const hyper_labels[] = {"OFF", "ON"};
 static int get_auto_off_mode(void) { return (int)settings_get_auto_off_mode(); }
 static void set_auto_off_mode(int v) { settings_set_auto_off_mode((auto_off_mode_t)v); }
@@ -325,17 +349,42 @@ static void set_lcd_contrast(int v)
 
 // サブメニュー定義
 static const menu_item_t settings_items[] = {
-    {"Ang. Unit", MI_ENUM, NULL, 0, get_angle_mode, set_angle_mode, angle_labels, 3, 0, 0, NULL, "Angle calculation mode"},
-    {"Display", MI_ENUM, NULL, 0, get_disp_mode, set_disp_mode, disp_labels, 3, 0, 0, NULL, "Number display format"},
-    {"Zero Pad", MI_ENUM, NULL, 0, get_zero_mode, set_zero_mode, zero_labels, 2, 0, 0, NULL, "Trailing zero display"},
+    {"Ang. Unit", MI_ENUM, NULL, 0, get_angle_mode, set_angle_mode, angle_labels, 3, 0, 0, NULL, "Angle unit"},
+    {"Display", MI_ENUM, NULL, 0, get_disp_mode, set_disp_mode, disp_labels, 3, 0, 0, NULL, "Display format"},
+    {"Digits", MI_ENUM, NULL, 0, get_digits_enum, set_digits_enum, digits_labels, 11, 0, 0, NULL, "Fraction digits"},
     {"Hyp. Mode", MI_ENUM, NULL, 0, get_hyper_mode, set_hyper_mode, hyper_labels, 2, 0, 0, NULL, "Hyperbolic trig mode"},
+};
 
+// Reset submenu actions
+static void action_reset_stack(void)
+{
+    rpn_reset_stack_only();
+    menu_close();
+}
+static void action_reset_vars(void)
+{
+    rpn_reset_vars_only();
+    menu_close();
+}
+static void action_reset_memory(void)
+{
+    rpn_reset_memory();
+    menu_close();
+}
+
+static const menu_item_t reset_items[] = {
+    {"Stack", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_stack, "Clear stack & Last X"},
+    {"Vars", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_vars, "Clear A..F vars"},
+    {"Memory", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_memory, "Clear Stack+Vars"},
+    {"All", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_calculator, "Factory reset"},
 };
 
 static const menu_item_t system_items[] = {
     {"Auto Off", MI_ENUM, NULL, 0, get_auto_off_mode, set_auto_off_mode, auto_off_labels, 4, 0, 0, NULL, "Auto power-off"},
+    {"Resume", MI_ENUM, NULL, 0, get_resume_enum, set_resume_enum, hyper_labels, 2, 0, 0, NULL, "Resume on boot"},
+    {"Last Key", MI_ENUM, NULL, 0, get_last_key_mode_enum, set_last_key_mode_enum, (const char *const[]){"Last X", "Undo"}, 2, 0, 0, NULL, "Last key behavior"},
     {"LCD Contrast", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_adjust_contrast, "Adjust LCD contrast"},
-    {"Reset Calc", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_calculator, "Reset calculator state"},
+    {"Reset", MI_SUBMENU, reset_items, sizeof(reset_items) / sizeof(reset_items[0]), NULL, NULL, NULL, 0, 0, 0, NULL, "Reset submenu"},
     {"About", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_about, "About this calculator"},
 };
 
@@ -586,7 +635,7 @@ void menu_render(void)
     if (item1_idx < menu->child_count && frame->index == item1_idx)
     {
         const menu_item_t *selected = &menu->children[item1_idx];
-        if (selected->type == MI_SUBMENU)
+        if (menu_item_has_arrow(selected))
         {
             line1[14] = LCD_CHAR_MENU_ARROW;
         }
@@ -594,7 +643,7 @@ void menu_render(void)
     if (item2_idx < menu->child_count && frame->index == item2_idx)
     {
         const menu_item_t *selected = &menu->children[item2_idx];
-        if (selected->type == MI_SUBMENU)
+        if (menu_item_has_arrow(selected))
         {
             line2[14] = LCD_CHAR_MENU_ARROW;
         }
