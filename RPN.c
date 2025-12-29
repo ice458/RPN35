@@ -1,6 +1,7 @@
 #include "RPN.h"
 #include "key.h"
 #include "settings.h"
+#include "macro.h"
 
 // 科学定数（2グループ×10件）
 typedef struct
@@ -105,6 +106,8 @@ static void undo_push_snapshot_if_enabled(void)
 {
     if (settings_get_last_key_mode() != LAST_KEY_UNDO)
         return;
+    if (macro_is_recording() || macro_is_playing())
+        return; // マクロ記録/再生中は記録しない
     // 未来分を切り捨て
     undo_truncate_future();
     // 満杯なら前詰め
