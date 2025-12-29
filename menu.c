@@ -375,8 +375,8 @@ static void action_reset_memory(void)
 static const menu_item_t reset_items[] = {
     {"Stack", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_stack, "Clear stack & Last X"},
     {"Vars", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_vars, "Clear A..F vars"},
-    {"Memory", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_memory, "Clear Stack+Vars"},
-    {"All", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_calculator, "Factory reset"},
+    {"Stack&Vars", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_memory, "Clear Stack+Vars"},
+    {"FactoryReset", MI_ACTION, NULL, 0, NULL, NULL, NULL, 0, 0, 0, action_reset_calculator, "Factory reset"},
 };
 
 static const menu_item_t system_items[] = {
