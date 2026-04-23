@@ -9,12 +9,12 @@
 // settings: 最終, macros: 末尾から2番目、本モジュール: 末尾から3番目
 #define RESUME_FLASH_OFFSET (PICO_FLASH_SIZE_BYTES - 3 * FLASH_SECTOR_SIZE)
 
-typedef struct __attribute__((packed))
+typedef struct
 {
     uint32_t magic;   // 'RSM1'
     uint32_t version; // 1
     uint32_t crc;     // data部のCRC32
-    struct __attribute__((packed))
+    struct
     {
         rpn_state_t rpn; // スタック/変数/LastX
     } data;
