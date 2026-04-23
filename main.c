@@ -141,7 +141,7 @@ static void refresh_display(void)
     if (g_show_mode)
     {
         BID_UINT128 x = rpn_stack_x();
-        char buf32[33];
+        char buf32[33] = {0};
         bid128_to_str(x, buf32, sizeof(buf32)); // 32桁に収まるよう丸め（末尾0保持）
 
         // 上段（先頭16文字）

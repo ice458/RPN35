@@ -1001,13 +1001,12 @@ bool rpn_var_apply_slot(int slot_idx)
     case RPN_VAR_OP_LD:
     {
         // pi/e と同じ挙動: 必要時のみpush → 入力クリア → Xへ設定 → 次の数値入力でpushさせる
+        undo_push_snapshot_if_enabled();
         if (flag_state.push_flag)
         {
-            undo_push_snapshot_if_enabled();
             stack_push_raw();
         }
         clear_input_state();
-        undo_push_snapshot_if_enabled();
         stack[0] = vars_mem[slot_idx];
         flag_state.push_flag = true;
         break;
@@ -1066,9 +1065,10 @@ bool rpn_const_apply(int group, int index)
     strncpy(vbuf, grp[index].value_str, sizeof(vbuf) - 1);
     vbuf[sizeof(vbuf) - 1] = '\0';
     bid128_from_string(&v, vbuf);
+    undo_push_snapshot_if_enabled();
     if (flag_state.push_flag)
     {
-        stack_push();
+        stack_push_raw();
     }
     clear_input_state();
     stack[0] = v;
@@ -1264,6 +1264,7 @@ void rpn_input_toggle_sign()
     else
     {
         // 入力確定後はXレジスタの符号を反転
+        undo_push_snapshot_if_enabled();
         last_x = stack[0];
         __bid128_negate(&stack[0], &stack[0]);
         after_operation();
@@ -1301,6 +1302,7 @@ void rpn_input_backspace()
 
 void rpn_clear_x()
 {
+    undo_push_snapshot_if_enabled();
     clear_input_state();
     bid128_from_string(&stack[0], "0");
     // 次の入力で上書き開始
@@ -1442,7 +1444,7 @@ void rpn_nth_root()
     bid128_from_string(&one, "1");
     __bid128_div(&inv_y, &one, &stack[1]); // 1/Y
     __bid128_pow(&res, &stack[0], &inv_y); // X^(1/Y)
-    stack_pop();
+    stack_pop_raw();
     stack[0] = res;
     after_operation();
 }
@@ -1638,7 +1640,7 @@ void rpn_logxy()
     __bid128_log(&ln_y, &stack[1]);
     __bid128_log(&ln_x, &stack[0]);
     __bid128_div(&res, &ln_y, &ln_x);
-    stack_pop();
+    stack_pop_raw();
     stack[0] = res;
     after_operation();
 }
@@ -1794,13 +1796,12 @@ void rpn_set_hyperbolic_mode(hyperbolic_mode_t mode)
 void rpn_input_pi()
 {
     // 入力中断して定数をXへ。必要なら push してから設定。
+    undo_push_snapshot_if_enabled();
     if (flag_state.push_flag)
     {
-        undo_push_snapshot_if_enabled();
         stack_push_raw();
     }
     clear_input_state();
-    undo_push_snapshot_if_enabled();
     bid128_from_string(&stack[0], "3.1415926535897932384626433832795028842");
     // 定数は確定値として扱うので、次の数値入力で push されるようにする
     flag_state.push_flag = true;
@@ -1808,13 +1809,12 @@ void rpn_input_pi()
 
 void rpn_input_e()
 {
+    undo_push_snapshot_if_enabled();
     if (flag_state.push_flag)
     {
-        undo_push_snapshot_if_enabled();
         stack_push_raw();
     }
     clear_input_state();
-    undo_push_snapshot_if_enabled();
     bid128_from_string(&stack[0], "2.7182818284590452353602874713526624978");
     flag_state.push_flag = true;
 }
