@@ -18,7 +18,9 @@
 void power_down_seq(void)
 {
     key_scan_pause();
-    clockctrl_enter_low_power(); // 電池残量ぎりぎりでの電流最小化
+    // 電池残量ぎりぎりでもLCD更新とフラッシュ書込みを完遂できるよう、
+    // CPU側の消費電流を落としてから終了処理を行う
+    clockctrl_enter_low_power();
     lcd_clear();
     lcd_set_cursor(1, 0);
     lcd_write_str("    See you!    ");

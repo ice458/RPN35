@@ -3,8 +3,12 @@
 #include <string.h>
 #include "hardware/sync.h"
 #include "hardware/gpio.h"
+#include "hardware/timer.h"
 #include "hardware_definition.h"
-#include "clock_ctrl.h"
+
+// 行駆動後の整定待ち[us]（クロストーク対策）。CPUサイクル空回しだと低クロック時に
+// 伸びてスキャン周期(TIMER_TICK)を超えてしまうため実時間で規定する。
+#define KEY_SETTLE_US 80
 
 // 内部状態
 typedef struct
@@ -220,14 +224,11 @@ static bool scan_timer_cb(repeating_timer_t *rt)
     for (uint8_t row = 0; row < 7; ++row)
     {
         drive_row(row, true);
-        // セトリング時間を増加（クロストーク対策）
-        for (volatile int i = 0; i < 100; ++i)
-            __asm volatile("nop");
+        busy_wait_us(KEY_SETTLE_US);
         uint8_t cols = (uint8_t)((gpio_get_all() & COL_MASK) >> 25u);
         drive_row(row, false);
         // 行間の微小遅延（クロストーク対策）
-        for (volatile int i = 0; i < 100; ++i)
-            __asm volatile("nop");
+        busy_wait_us(KEY_SETTLE_US);
 
         if (cols)
         {
@@ -239,8 +240,7 @@ static bool scan_timer_cb(repeating_timer_t *rt)
     // デバウンスとイベント生成
     if (raw != gk.last_code)
     {
-        // 何かしらのキーが押下されたタイミングで即時クロック高速化
-        clockctrl_boost_now();
+        // クロック昇速はIRQでは行わない(フォアグラウンドと競合するため)
         gk.debounce = 0;
         gk.last_code = raw;
     }

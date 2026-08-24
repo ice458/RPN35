@@ -5,6 +5,7 @@
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
 #include "hardware_definition.h"
+#include "clock_ctrl.h"
 
 // タイムアウト付きI2C送信（LCD専用）
 // 成功: 送信バイト数、失敗: 負のエラー値
@@ -62,6 +63,9 @@ static void lcd_send_data_bytes(const uint8_t *data, uint8_t len)
 void lcd_init(void)
 {
     i2c_init(I2C_PORT, 100 * 1000);
+    // リトライ時のリカバリからも呼ばれるため、低クロック中は100kHzを生成できない。
+    // 現在のclk_sysに合わせて設定し直す。
+    clockctrl_apply_i2c_baudrate();
 
     gpio_set_function(I2C_SDA, GPIO_FUNC_I2C);
     gpio_set_function(I2C_SCL, GPIO_FUNC_I2C);

@@ -6,8 +6,8 @@ extern "C"
 {
 #endif
 
-    // 即時ブースト
-    void clockctrl_boost_now(void);
+    // 現在のclk_sysに適したI2Cボーレートを適用（clk_sys変更後は必須）
+    void clockctrl_apply_i2c_baudrate(void);
     // 低速クロックへ
     void clockctrl_enter_low_power(void);
     // 高速クロックへ
