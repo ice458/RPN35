@@ -2,10 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "hardware/i2c.h"
-#include "hardware/clocks.h"
-#include "hardware/pll.h"
 #include "clock_ctrl.h"
-#include "hardware/vreg.h"
 #include "hardware_definition.h"
 
 #include "LCD.h"
@@ -21,7 +18,7 @@
 void power_down_seq(void)
 {
     key_scan_pause();
-    clockctrl_enter_high_speed_12mhz();
+    clockctrl_enter_low_power(); // 電池残量ぎりぎりでの電流最小化
     lcd_clear();
     lcd_set_cursor(1, 0);
     lcd_write_str("    See you!    ");
@@ -30,6 +27,11 @@ void power_down_seq(void)
     resume_save_if_enabled();
     sleep_ms(500);
     POWER_DOWN;
+    // 実電源断まで数msのラグがあるため、メインループに戻らせず確実に停止する
+    while (1)
+    {
+        tight_loop_contents();
+    }
 }
 
 // SHOWモード（Xを2行で表示）
@@ -581,38 +583,7 @@ static bool handle_key(key_event_t ev)
 
 int main(void)
 {
-    vreg_set_voltage(VREG_VOLTAGE_1_00);
-    sleep_ms(1);
-
-    clock_configure_undivided(clk_ref,
-                              CLOCKS_CLK_REF_CTRL_SRC_VALUE_XOSC_CLKSRC,
-                              0,
-                              12 * MHZ);
-
-    clock_configure_undivided(clk_sys,
-                              CLOCKS_CLK_SYS_CTRL_SRC_VALUE_CLK_REF,
-                              0,
-                              12 * MHZ);
-    pll_deinit(pll_usb);
-    pll_deinit(pll_sys);
-
-    // PLLは無効なのでクロックは供給されない
-    clock_configure_undivided(clk_peri,
-                              CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
-                              0,
-                              0);
-    clock_configure_undivided(clk_adc,
-                              CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
-                              0,
-                              0);
-    clock_configure_undivided(clk_usb,
-                              CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
-                              0,
-                              0);
-    clock_configure_undivided(clk_hstx,
-                              CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS,
-                              0,
-                              0);
+    // クロック/VREG初期化はclock_ctrl.cのruntime_init_clocks()が先に完了済み
 
     // 電源ラッチ
     gpio_init(POWER_EN);

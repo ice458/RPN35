@@ -233,13 +233,13 @@ uint32_t settings_get_auto_off_ms(void)
     case AUTO_OFF_DISABLED:
         return 0u;
     case AUTO_OFF_3_MIN:
-        return 3u * 60u * 1000u / 12u;
+        return 3u * 60u * 1000u;
     case AUTO_OFF_5_MIN:
-        return 5u * 60u * 1000u / 12u;
+        return 5u * 60u * 1000u;
     case AUTO_OFF_10_MIN:
-        return 10u * 60u * 1000u / 12u;
+        return 10u * 60u * 1000u;
     default:
-        return 10u * 60u * 1000u / 12u;
+        return 10u * 60u * 1000u;
     }
 }
 

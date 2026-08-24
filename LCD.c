@@ -39,7 +39,11 @@ static void lcd_send_cmd(uint8_t cmd)
 {
     uint8_t buf[2] = {0x80, cmd};
     lcd_i2c_write_with_retry(buf, 2, false);
-    sleep_ms(1);
+    // Clear/Return Homeは内部実行時間が長い(datasheet上1.08~1.64ms)ため別枠で待つ
+    if (cmd == 0x01 || cmd == 0x02)
+        sleep_ms(3);
+    else
+        sleep_ms(1);
 }
 
 static void lcd_send_data_bytes(const uint8_t *data, uint8_t len)
